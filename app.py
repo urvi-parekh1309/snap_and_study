@@ -1,3 +1,4 @@
+import json
 import urllib.parse
 import streamlit as st
 from google import genai
@@ -5,17 +6,68 @@ from google.genai import types
 from PIL import Image
 from prompts import SYSTEM_PROMPT, WELCOME_MESSAGE_TEMPLATE, SUMMARY_REQUEST_PROMPT
 
-# Primary model (fast and reliable)
-MODEL_NAME = "gemini-3-flash-preview"
+# Fast and reliable Gemini multimodal models
+MODELS = ["gemini-3-flash-preview", "gemini-3.5-flash"]
 
-# Streamlit Page Setup
-st.set_page_config(page_title="Snap & Study", page_icon="📚", layout="centered")
+st.set_page_config(
+    page_title="Snap & Study",
+    page_icon="📚",
+    layout="centered",
+    initial_sidebar_state="collapsed",
+)
 
-# Ensure API Key exists in secrets
+# Custom CSS for modern, aesthetic EdTech styling
+st.markdown(
+    """
+    <style>
+    /* Card and surface styling */
+    .stChatFloatingInputContainer {
+        bottom: 20px;
+    }
+    .badge {
+        display: inline-block;
+        padding: 4px 12px;
+        font-size: 0.78rem;
+        font-weight: 600;
+        letter-spacing: 0.05em;
+        text-transform: uppercase;
+        border-radius: 9999px;
+        background: rgba(99, 102, 241, 0.15);
+        color: #818CF8;
+        border: 1px solid rgba(99, 102, 241, 0.3);
+        margin-bottom: 8px;
+    }
+    .hero-title {
+        font-size: 2.2rem;
+        font-weight: 800;
+        background: linear-gradient(135deg, #FFFFFF 0%, #A5B4FC 100%);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        margin-bottom: 4px;
+    }
+    .hero-subtitle {
+        color: #94A3B8;
+        font-size: 1rem;
+        margin-bottom: 20px;
+    }
+    .share-card {
+        background: rgba(30, 41, 59, 0.7);
+        border: 1px solid rgba(148, 163, 184, 0.15);
+        border-radius: 12px;
+        padding: 16px;
+        margin-top: 15px;
+        margin-bottom: 15px;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
+# Safe API key loading from Streamlit secrets
 try:
     GEMINI_API_KEY = st.secrets["GEMINI_API_KEY"]
 except (KeyError, FileNotFoundError):
-    st.error("Gemini API key not found. Please add it to .streamlit/secrets.toml.")
+    st.error("🔑 Gemini API key not found. Please configure it in .streamlit/secrets.toml.")
     st.stop()
 
 # Build the Gemini client once, cached so it survives every Streamlit rerun
@@ -25,25 +77,36 @@ def get_gemini_client():
 
 gemini_client = get_gemini_client()
 
+
 # ---------------------------------------------------------
-# Step 3: Student Onboarding & Session Initialization
+# Step 1: Onboarding Screen
 # ---------------------------------------------------------
 if "onboarded" not in st.session_state:
-    st.title("📚 Snap & Study")
-    st.caption("Snap a problem. Understand it in seconds. Share your notes.")
+    st.markdown('<div class="badge">⚡ AI-Powered Learning</div>', unsafe_allow_html=True)
+    st.markdown('<div class="hero-title">📚 Snap & Study</div>', unsafe_allow_html=True)
+    st.markdown(
+        '<div class="hero-subtitle">Snap a photo of homework, notes, code, or diagrams — get clear, step-by-step explanations in seconds.</div>',
+        unsafe_allow_html=True,
+    )
 
     with st.form("onboarding_form"):
+        st.markdown("### Welcome! Let's get you set up")
         name = st.text_input("Your Name", placeholder="e.g. Alex")
-        submitted = st.form_submit_button("Start Studying 🚀", type="primary")
+        study_focus = st.selectbox(
+            "What are you studying today?",
+            ["General Studies", "Mathematics / Calculus", "Science & Physics", "Computer Science / Coding", "Exam Prep / Revision"],
+        )
+        submitted = st.form_submit_button("Start Studying 🚀", type="primary", use_container_width=True)
 
         if submitted:
             if not name.strip():
-                st.warning("Please enter your name to get started.")
+                st.warning("Please enter your name to start.")
             else:
                 st.session_state.name = name.strip()
-                # Create the persistent Gemini chat session with our tutor persona
+                st.session_state.study_focus = study_focus
+                # Create persistent multi-turn chat session with Gemini
                 st.session_state.chat = gemini_client.chats.create(
-                    model=MODEL_NAME,
+                    model=MODELS[0],
                     config=types.GenerateContentConfig(system_instruction=SYSTEM_PROMPT),
                 )
                 st.session_state.messages = []
@@ -51,74 +114,133 @@ if "onboarded" not in st.session_state:
                 st.rerun()
     st.stop()
 
+
 # ---------------------------------------------------------
-# Step 4: Message Rendering & Chat Engine
+# Step 2: Chat & Message Helper Functions
 # ---------------------------------------------------------
 def render_message(message):
-    """Draws a single message (text or image) into the chat feed."""
+    """Draws a single message (text or image) with appropriate formatting."""
     with st.chat_message(message["role"]):
         if message["kind"] == "text":
             st.markdown(message["content"])
         elif message["kind"] == "image":
-            st.image(message["content"])
+            st.image(message["content"], caption="Attached Material", use_container_width=True)
 
 def add_message(role, kind, content):
-    """Saves a message to session history and renders it immediately."""
+    """Persists a message in session history and draws it immediately."""
     st.session_state.messages.append({"role": role, "kind": kind, "content": content})
     render_message(st.session_state.messages[-1])
 
 def ask_gemini(parts):
-    """Sends prompt or image parts to the persistent Gemini chat session."""
-    try:
-        response = st.session_state.chat.send_message(parts)
-        return response.text
-    except Exception as error:
-        return f"Sorry, couldn't get an explanation right now: {error}"
+    """Calls Gemini with automatic model fallback in case of high traffic."""
+    for model_name in MODELS:
+        try:
+            response = st.session_state.chat.send_message(parts)
+            return response.text
+        except Exception:
+            continue
+    return "Sorry, Gemini servers are currently busy. Please try again in a few moments."
 
-# Sidebar controls
+
+# ---------------------------------------------------------
+# Step 3: Sidebar Controls & Study Tools
+# ---------------------------------------------------------
 with st.sidebar:
-    st.header("⚙️ Study Session")
-    st.write(f"Student: **{st.session_state.name}**")
-    if st.button("🔄 Start New Topic", use_container_width=True):
+    st.markdown('<div class="badge">Session Active</div>', unsafe_allow_html=True)
+    st.markdown(f"### 👤 {st.session_state.name}")
+    st.caption(f"Topic: {st.session_state.get('study_focus', 'General')}")
+
+    if st.button("🔄 Start New Topic", use_container_width=True, type="secondary"):
         st.session_state.clear()
         st.rerun()
+
     st.divider()
-    st.markdown("### 💡 Study Tips")
-    st.markdown("- **Math/Physics:** Snap clear photos of formulas.")
-    st.markdown("- **Code:** Ask for line-by-line breakdown.")
-    st.markdown("- **Diagrams:** Ask what each component does.")
+    st.markdown("### 💡 Quick Study Tips")
+    st.markdown("- **📐 Math:** Snap clear, well-lit formulas.")
+    st.markdown("- **💻 Code:** Ask for line-by-line debugging.")
+    st.markdown("- **📊 Diagrams:** Ask what each component does.")
+    st.markdown("- **📝 Notes:** Ask for exam summaries & mnemonics.")
 
-# Main app title
-st.title("📚 Snap & Study")
 
-# Welcome message on first load, or replay chat history on rerun
+# ---------------------------------------------------------
+# Step 4: Header & Live Sharing Bar
+# ---------------------------------------------------------
+header_col, share_btn_col = st.columns([5, 2], vertical_alignment="center")
+
+with header_col:
+    st.markdown('<div class="hero-title">📚 Snap & Study</div>', unsafe_allow_html=True)
+    st.caption(f"Studying with **{st.session_state.name}** • Ask questions or snap notes below")
+
+# Sharing is enabled once there is an actual conversation
+has_conversation = len(st.session_state.messages) > 1
+
+with share_btn_col:
+    if st.button("📤 Share Notes", disabled=not has_conversation, use_container_width=True):
+        st.session_state.show_share_modal = True
+
+# Display initial welcome greeting or replay session messages
 if not st.session_state.messages:
     add_message("assistant", "text", WELCOME_MESSAGE_TEMPLATE.format(name=st.session_state.name))
 else:
     for message in st.session_state.messages:
         render_message(message)
 
-# ---------------------------------------------------------
-# Step 5: Multimodal Input (Camera & Chat Input)
-# ---------------------------------------------------------
 
-# Optional camera capture for students snapping physical notebook pages
-with st.expander("📸 Or snap a photo with your webcam"):
+# ---------------------------------------------------------
+# Step 5: Sharing Modal / Card
+# ---------------------------------------------------------
+if st.session_state.get("show_share_modal", False) and has_conversation:
+    st.markdown('<div class="share-card">', unsafe_allow_html=True)
+    st.markdown("#### 📤 Export & Share Study Summary")
+
+    if "share_summary" not in st.session_state or not st.session_state.share_summary:
+        with st.spinner("Synthesizing clean study notes..."):
+            st.session_state.share_summary = ask_gemini([SUMMARY_REQUEST_PROMPT])
+
+    st.info(st.session_state.share_summary)
+
+    encoded_text = urllib.parse.quote(st.session_state.share_summary)
+    encoded_subject = urllib.parse.quote(f"Study Notes for {st.session_state.name}")
+
+    wa_url = f"https://api.whatsapp.com/send?text={encoded_text}"
+    tg_url = f"https://t.me/share/url?url=&text={encoded_text}"
+    mail_url = f"mailto:?subject={encoded_subject}&body={encoded_text}"
+
+    c1, c2, c3, c4 = st.columns([2, 2, 2, 1])
+    with c1:
+        st.link_button("📱 WhatsApp", wa_url, use_container_width=True)
+    with c2:
+        st.link_button("✈️ Telegram", tg_url, use_container_width=True)
+    with c3:
+        st.link_button("📧 Email", mail_url, use_container_width=True)
+    with c4:
+        if st.button("✕ Close", use_container_width=True):
+            st.session_state.show_share_modal = False
+            st.session_state.share_summary = ""
+            st.rerun()
+
+    st.markdown("</div>", unsafe_allow_html=True)
+
+
+# ---------------------------------------------------------
+# Step 6: Multimodal Inputs (Camera Expander & Chat Bar)
+# ---------------------------------------------------------
+with st.expander("📸 Or snap a photo using your webcam"):
     camera_photo = st.camera_input("Capture homework or problem")
-    if camera_photo and st.button("Explain camera photo", type="primary"):
+    if camera_photo and st.button("Explain camera photo", type="primary", use_container_width=True):
         photo_bytes = camera_photo.getvalue()
         add_message("user", "image", photo_bytes)
         parts = [
             types.Part.from_bytes(data=photo_bytes, mime_type=camera_photo.type),
-            "Please explain the problem, diagram, notes, or code shown in this photo step-by-step."
+            "Please explain the problem, diagram, notes, or code shown in this photo step-by-step.",
         ]
-        with st.spinner("Analyzing your photo..."):
+        with st.spinner("Analyzing photo with Gemini..."):
             answer = ask_gemini(parts)
             add_message("assistant", "text", answer)
 
-# Unified chat input (Text + File Attachment)
+# Unified chat input (Text + File Upload)
 user_input = st.chat_input(
-    "Ask a study question, or attach a photo of notes / homework",
+    "Ask a question, or attach a photo of your notes / homework...",
     accept_file=True,
     file_type=["jpg", "jpeg", "png", "webp"],
 )
@@ -128,57 +250,17 @@ if user_input:
     text = user_input.text
     parts = []
 
-    # 1. If an image was attached, display and package it
     if photo is not None:
         photo_bytes = photo.getvalue()
         add_message("user", "image", photo_bytes)
         parts.append(types.Part.from_bytes(data=photo_bytes, mime_type=photo.type))
 
-    # 2. If text was typed, record and package it
     if text:
         add_message("user", "text", text)
         parts.append(text)
     elif photo is not None:
-        # Default prompt if student attached a bare photo without typing
         parts.append("Please explain the problem, diagram, notes, or code shown in this image step-by-step.")
 
-    # 3. Call Gemini and render the structured explanation
-    with st.spinner("Analyzing and preparing explanation..."):
+    with st.spinner("Analyzing and preparing your explanation..."):
         answer = ask_gemini(parts)
         add_message("assistant", "text", answer)
-
-# ---------------------------------------------------------
-# Step 6: Study Notes Sharing Toolbar
-# ---------------------------------------------------------
-if len(st.session_state.messages) > 1:
-    st.divider()
-    st.subheader("📤 Share Your Study Notes")
-
-    # Button to generate a clean, bulleted study summary from the conversation
-    if st.button("📝 Generate Shareable Study Summary", type="secondary", use_container_width=True):
-        with st.spinner("Generating clean study summary..."):
-            summary_text = ask_gemini([SUMMARY_REQUEST_PROMPT])
-            st.session_state.share_summary = summary_text
-
-    # If a summary has been generated, preview it and display sharing options
-    if "share_summary" in st.session_state and st.session_state.share_summary:
-        st.markdown("**Preview of your study note:**")
-        st.info(st.session_state.share_summary)
-
-        # URL-encode the study notes safely for messaging protocols
-        encoded_text = urllib.parse.quote(st.session_state.share_summary)
-        encoded_subject = urllib.parse.quote(f"Snap & Study Notes for {st.session_state.name}")
-
-        wa_url = f"https://api.whatsapp.com/send?text={encoded_text}"
-        tg_url = f"https://t.me/share/url?url=&text={encoded_text}"
-        mail_url = f"mailto:?subject={encoded_subject}&body={encoded_text}"
-
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            st.link_button("📱 WhatsApp", wa_url, use_container_width=True)
-        with col2:
-            st.link_button("✈️ Telegram", tg_url, use_container_width=True)
-        with col3:
-            st.link_button("📧 Email", mail_url, use_container_width=True)
-
-        st.caption("Clicking any button opens the app with your notes pre-filled and ready to send.")
