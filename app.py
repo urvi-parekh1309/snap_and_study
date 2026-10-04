@@ -6,7 +6,6 @@ from email.mime.text import MIMEText
 import streamlit as st
 from google import genai
 from google.genai import types
-from PIL import Image
 from prompts import SUMMARY_REQUEST_PROMPT, SYSTEM_PROMPT, WELCOME_MESSAGE_TEMPLATE
 
 # Fast and reliable Gemini multimodal models
